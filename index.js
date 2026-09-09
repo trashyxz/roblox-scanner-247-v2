@@ -1,7 +1,8 @@
 const http = require('http');
+const crypto = require('crypto');
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
-// 1. Health-check HTTP Server for Render
+// 1. Health-check HTTP Server for Render Dashboard
 const PORT = process.env.PORT || 10000;
 const STATS = {
   startTime: Date.now(),
@@ -14,8 +15,40 @@ const STATS = {
 http.createServer((req, res) => {
   const uptimeHours = ((Date.now() - STATS.startTime) / (1000 * 60 * 60)).toFixed(2);
   res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end(`<h1>Roblox 24/7 Scanner & Auto-Claimer ONLINE 🟢</h1>
-           <p>Uptime: ${uptimeHours} hrs | Checked: ${STATS.totalChecked} | Found: ${STATS.availableFound}</p>`);
+  res.end(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Roblox Scanner Dashboard</title>
+      <meta http-equiv="refresh" content="10">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .card { background: #1e293b; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 100%; max-width: 450px; border: 1px solid #334155; }
+        h1 { margin-top: 0; font-size: 1.4rem; color: #38bdf8; display: flex; align-items: center; justify-content: space-between; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+        .box { background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #334155; }
+        .val { font-size: 1.3rem; font-weight: bold; margin-top: 0.2rem; }
+        .green { color: #4ade80; }
+        .sub { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Roblox 24/7 Scanner <span>🟢 ONLINE</span></h1>
+        <div class="grid">
+          <div class="box"><div class="sub">Total Checked</div><div class="val">${STATS.totalChecked}</div></div>
+          <div class="box"><div class="sub">Available Found</div><div class="val green">${STATS.availableFound}</div></div>
+          <div class="box"><div class="sub">Uptime</div><div class="val">${uptimeHours} hrs</div></div>
+          <div class="box"><div class="sub">Check Speed</div><div class="val">${(STATS.currentDelay / 1000).toFixed(1)}s</div></div>
+        </div>
+        <div class="box" style="margin-top:1rem;">
+          <div class="sub">Last Rare Found</div>
+          <div class="val green">${STATS.lastFound}</div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `);
 }).listen(PORT, () => {
   console.log(`[HTTP Server] Live on port ${PORT}`);
 });
@@ -26,7 +59,6 @@ const CONFIG = {
   discordToken: process.env.DISCORD_BOT_TOKEN || '',
   mainChannelId: process.env.DISCORD_MAIN_CHANNEL_ID || '',
   historyChannelId: process.env.DISCORD_HISTORY_CHANNEL_ID || '',
-  robloxCookie: process.env.ROBLOSECURITY_COOKIE || '',
   autoClaimEnabled: process.env.AUTO_CLAIM === 'true',
   baseDelayMs: 2000
 };
@@ -42,14 +74,16 @@ const WORDLISTS = {
   anime: ["kuro", "neko", "yuki", "sora", "kami", "ren", "tsuki", "hana", "kage", "ryu", "sen", "zero", "shin"],
   y2k_edgy: ["vamp", "void", "grim", "slay", "goth", "soul", "cult", "risk", "foul", "hex", "purg", "veil", "toxic"],
   cute_soft: ["luna", "faye", "silk", "cozy", "star", "halo", "blush", "petal", "miso", "plum", "dove", "glow", "angel"],
-  og_roots: ["sky", "zen", "orb", "vox", "arc", "pix", "lux", "neo", "aura", "nova", "echo", "mist", "frost", "dusk"]
+  og_roots: ["sky", "zen", "orb", "vox", "arc", "pix", "lux", "neo", "aura", "nova", "echo", "mist", "frost", "dusk"],
+  compound_bases: ["frost", "void", "grim", "shadow", "dusk", "star", "glow", "silk", "moon", "cloud", "soul", "ember", "mist"],
+  compound_suffixes: ["arc", "mist", "veil", "orb", "dusk", "faye", "halo", "petal", "aura", "spire", "glow", "byte", "pulse"]
 };
 
-// 3. Generators
+// 3. Username Generators
 function generateCandidate(selectedMode) {
   let mode = selectedMode;
   if (mode === 'all_genres') {
-    const genres = ['pure3l', 'clean4l', 'anime', 'y2k_edgy', 'cute_soft', 'og_prefix'];
+    const genres = ['pure3l', 'clean4l', 'anime', 'y2k_edgy', 'cute_soft', 'og_prefix', 'pseudo5l', 'compound_og'];
     mode = genres[Math.floor(Math.random() * genres.length)];
   }
 
@@ -66,6 +100,24 @@ function generateCandidate(selectedMode) {
     const c2 = CONSONANTS[Math.floor(Math.random() * CONSONANTS.length)];
     const c3 = ALL_LETTERS[Math.floor(Math.random() * ALL_LETTERS.length)];
     return { name: `${c1}${v1}${c2}${c3}`, genre: "Clean 4-Letter" };
+  }
+
+  if (mode === 'pseudo5l') {
+    const c1 = CONSONANTS[Math.floor(Math.random() * CONSONANTS.length)];
+    const v1 = VOWELS[Math.floor(Math.random() * VOWELS.length)];
+    const c2 = CONSONANTS[Math.floor(Math.random() * CONSONANTS.length)];
+    const v2 = VOWELS[Math.floor(Math.random() * VOWELS.length)];
+    const end = ALL_LETTERS[Math.floor(Math.random() * ALL_LETTERS.length)];
+    return { name: `${c1}${v1}${c2}${v2}${end}`, genre: "5-Letter Pseudoword" };
+  }
+
+  if (mode === 'compound_og') {
+    const base = WORDLISTS.compound_bases[Math.floor(Math.random() * WORDLISTS.compound_bases.length)];
+    let suffix = WORDLISTS.compound_suffixes[Math.floor(Math.random() * WORDLISTS.compound_suffixes.length)];
+    while (suffix === base) {
+      suffix = WORDLISTS.compound_suffixes[Math.floor(Math.random() * WORDLISTS.compound_suffixes.length)];
+    }
+    return { name: `${base}${suffix}`, genre: "Compound Double OG" };
   }
 
   if (mode === 'anime') {
@@ -96,43 +148,49 @@ function generateCandidate(selectedMode) {
   return { name: "vsky", genre: "Default" };
 }
 
-// 4. Roblox Cookie Auto-Claimer Module
+// 4. 0-Robux Free Auto-Signup Module
+function generateRandomPassword() {
+  return 'Rbx!' + crypto.randomBytes(6).toString('hex') + '99';
+}
+
 async function claimUsernameOnRoblox(username) {
-  if (!CONFIG.robloxCookie) return { success: false, reason: "No Cookie Configured" };
+  const password = generateRandomPassword();
 
   try {
-    // Step A: Fetch CSRF Token
-    const csrfRes = await fetch("https://auth.roblox.com/v1/login", {
-      method: "POST",
-      headers: { "Cookie": `.ROBLOSECURITY=${CONFIG.robloxCookie}` }
-    });
-    const csrfToken = csrfRes.headers.get("x-csrf-token");
-
-    if (!csrfToken) return { success: false, reason: "Failed to obtain CSRF Token" };
-
-    // Step B: Send Name Change / Claim Request
-    const claimRes = await fetch("https://accountsettings.roblox.com/v1/username", {
+    const signupRes = await fetch("https://auth.roblox.com/v2/signup", {
       method: "POST",
       headers: {
-        "Cookie": `.ROBLOSECURITY=${CONFIG.robloxCookie}`,
-        "x-csrf-token": csrfToken,
-        "Content-Type": "application/json"
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ username, password: "" })
+      body: JSON.stringify({
+        username: username,
+        password: password,
+        birthday: "2000-01-01",
+        gender: 2,
+        isRbxIsUnder13: false
+      })
     });
 
-    if (claimRes.ok) {
-      return { success: true, reason: "Claimed Successfully!" };
+    const data = await signupRes.json();
+
+    if (signupRes.ok && data.userId) {
+      return {
+        success: true,
+        username: username,
+        password: password,
+        userId: data.userId
+      };
     } else {
-      const errData = await claimRes.json().catch(() => ({}));
-      return { success: false, reason: errData.errors?.[0]?.message || `Status Code ${claimRes.status}` };
+      const errReason = data.errors?.[0]?.message || `HTTP ${signupRes.status}`;
+      return { success: false, reason: errReason };
     }
   } catch (err) {
     return { success: false, reason: err.message };
   }
 }
 
-// 5. Verification Check
+// 5. Dual Verification Check
 async function checkUsername(username) {
   const customHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -180,6 +238,8 @@ const slashCommands = [
       .setRequired(true)
       .addChoices(
         { name: 'All Genres', value: 'all_genres' },
+        { name: '5-Letter Pseudowords', value: 'pseudo5l' },
+        { name: 'Compound Double OG', value: 'compound_og' },
         { name: 'Pure 3-Letter', value: 'pure3l' },
         { name: 'Clean 4-Letter', value: 'clean4l' },
         { name: 'Anime', value: 'anime' },
@@ -203,7 +263,8 @@ discordClient.on('interactionCreate', async interaction => {
         { name: "Available Found", value: `${STATS.availableFound}`, inline: true },
         { name: "Current Mode", value: `\`${CONFIG.mode}\``, inline: true },
         { name: "Uptime", value: `${uptime} hours`, inline: true },
-        { name: "Auto-Claimer", value: CONFIG.autoClaimEnabled ? "🟢 ENABLED" : "🔴 DISABLED", inline: true }
+        { name: "Auto-Claimer (0-Robux)", value: CONFIG.autoClaimEnabled ? "🟢 ENABLED" : "🔴 DISABLED", inline: true },
+        { name: "Unique Memory", value: `${seenUsernames.size} names`, inline: true }
       );
     await interaction.reply({ embeds: [embed] });
   }
@@ -227,28 +288,51 @@ discordClient.on('interactionCreate', async interaction => {
   }
 });
 
-// 7. Core Dispatcher & Scanner Loop
+// 7. Dispatch Alerts (Main + Lifetime History Channels)
 async function dispatchAlert(candidate, claimResult) {
-  const embed = new EmbedBuilder()
-    .setTitle("🚨 RARE USERNAME UNLOCKED!")
-    .setDescription(`**Username:** \`${candidate.name}\`\n**Genre:** \`${candidate.genre}\`\n**Length:** \`${candidate.name.length} Letters\``)
-    .setColor(0x00ff00)
-    .setTimestamp();
-
-  if (CONFIG.autoClaimEnabled) {
-    embed.addFields({
-      name: "⚡ Sniper Mode Status",
-      value: claimResult.success ? `🎉 **AUTOMATICALLY CLAIMED!**` : `⚠️ Claim Attempt Failed: ${claimResult.reason}`
-    });
-  }
-
-  // Send to Main Channel
   if (CONFIG.mainChannelId) {
     const channel = await discordClient.channels.fetch(CONFIG.mainChannelId).catch(() => null);
-    if (channel) channel.send({ embeds: [embed] });
+    if (channel) {
+      if (CONFIG.autoClaimEnabled && claimResult.success) {
+        // SUCCESSFULLY CREATED NEW ACCOUNT FOR FREE!
+        const embed = new EmbedBuilder()
+          .setTitle("🎉 NEW ACCOUNT AUTOMATICALLY CREATED!")
+          .setDescription(`The bot successfully registered this username for **0 Robux**!`)
+          .setColor(0x00FF00)
+          .addFields(
+            { name: "👤 Username", value: `\`${claimResult.username}\``, inline: true },
+            { name: "🔑 Generated Password", value: `||\`${claimResult.password}\`|| *(Click to reveal)*`, inline: true },
+            { name: "🆔 User ID", value: `\`${claimResult.userId}\``, inline: true },
+            { name: "🎭 Genre Style", value: `\`${candidate.genre}\``, inline: true }
+          )
+          .setFooter({ text: "Log in immediately at Roblox.com and change the password!" })
+          .setTimestamp();
+
+        await channel.send({ content: "🚨 **NEW RARE ACCOUNT CLAIMED!** 🚨", embeds: [embed] });
+      } else {
+        // MANUAL CLAIM LINK (If auto-claim disabled or CAPTCHA triggered)
+        const embed = new EmbedBuilder()
+          .setTitle("🚨 RARE USERNAME UNLOCKED!")
+          .setDescription(`**Username:** \`${candidate.name}\`\n**Genre:** \`${candidate.genre}\`\n**Length:** \`${candidate.name.length} Letters\``)
+          .setColor(CONFIG.autoClaimEnabled ? 0xFFA500 : 0x00FF00)
+          .addFields(
+            { 
+              name: "⚡ Quick Claim Link", 
+              value: `[Click Here to Register on Roblox](https://www.roblox.com/CreateAccount?returnUrl=https%3A%2F%2Fwww.roblox.com%2F%3Fnl%3Dtrue)` 
+            }
+          )
+          .setTimestamp();
+
+        if (CONFIG.autoClaimEnabled && !claimResult.success) {
+          embed.addFields({ name: "⚠️ Auto-Claim Status", value: `Failed: \`${claimResult.reason}\` (Manual signup required)` });
+        }
+
+        await channel.send({ embeds: [embed] });
+      }
+    }
   }
 
-  // Send to Lifetime History Channel
+  // History Channel Permanent Log
   if (CONFIG.historyChannelId) {
     const histChannel = await discordClient.channels.fetch(CONFIG.historyChannelId).catch(() => null);
     if (histChannel) {
@@ -261,6 +345,7 @@ async function dispatchAlert(candidate, claimResult) {
   }
 }
 
+// 8. Scanner Loop with Unbounded Deduplication
 async function startScanner() {
   console.log("🚀 Multi-Feature Roblox Scanner Booting...");
 
@@ -282,12 +367,12 @@ async function startScanner() {
 
   while (true) {
     try {
-      let candidate = generateCandidate(CONFIG.mode);
-      let attempts = 0;
-      while (seenUsernames.has(candidate.name) && attempts < 10) {
+      // Unbounded retry filter ensuring zero repeat username checks
+      let candidate;
+      do {
         candidate = generateCandidate(CONFIG.mode);
-        attempts++;
-      }
+      } while (seenUsernames.has(candidate.name));
+
       seenUsernames.add(candidate.name);
 
       const status = await checkUsername(candidate.name);
@@ -308,7 +393,7 @@ async function startScanner() {
         STATS.currentDelay = CONFIG.baseDelayMs;
       } else if (status === 'taken') {
         STATS.totalChecked++;
-        console.log(`[Taken] ${candidate.name} (${candidate.genre})`);
+        console.log(`[Taken] ${candidate.name} (${candidate.genre}) [Unique Memory: ${seenUsernames.size}]`);
         STATS.currentDelay = CONFIG.baseDelayMs;
       } else if (status === 'ratelimit') {
         console.warn("⚠️ Rate limited. Pausing 15s...");
