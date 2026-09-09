@@ -1,67 +1,38 @@
 const http = require('http');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
-// 1. Live Stats Tracking for Dashboard
+// 1. Health-check HTTP Server for Render
+const PORT = process.env.PORT || 10000;
 const STATS = {
   startTime: Date.now(),
   totalChecked: 0,
   availableFound: 0,
   lastFound: 'None yet',
-  status: 'ONLINE 🟢',
   currentDelay: 2000
 };
 
-// 2. Health-check & Visual Status Webpage
-const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
   const uptimeHours = ((Date.now() - STATS.startTime) / (1000 * 60 * 60)).toFixed(2);
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Roblox Scanner Status</title>
-      <meta http-equiv="refresh" content="10">
-      <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .card { background: #1e293b; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 100%; max-width: 450px; border: 1px solid #334155; }
-        h1 { margin-top: 0; font-size: 1.5rem; color: #38bdf8; display: flex; align-items: center; justify-content: space-between; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem; }
-        .stat-box { background: #0f172a; padding: 1rem; border-radius: 8px; border: 1px solid #334155; }
-        .stat-value { font-size: 1.4rem; font-weight: bold; color: #f1f5f9; margin-top: 0.25rem; }
-        .stat-label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
-        .highlight { color: #4ade80; }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <h1>Roblox Finder <span>${STATS.status}</span></h1>
-        <div class="stat-grid">
-          <div class="stat-box"><div class="stat-label">Total Checked</div><div class="stat-value">${STATS.totalChecked}</div></div>
-          <div class="stat-box"><div class="stat-label">Available Found</div><div class="stat-value highlight">${STATS.availableFound}</div></div>
-          <div class="stat-box"><div class="stat-label">Uptime</div><div class="stat-value">${uptimeHours} hrs</div></div>
-          <div class="stat-box"><div class="stat-label">Check Speed</div><div class="stat-value">${(STATS.currentDelay / 1000).toFixed(1)}s</div></div>
-        </div>
-        <div style="margin-top: 1.5rem;" class="stat-box">
-          <div class="stat-label">Last Rare Name Found</div>
-          <div class="stat-value highlight">${STATS.lastFound}</div>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
   res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end(html);
+  res.end(`<h1>Roblox 24/7 Scanner & Auto-Claimer ONLINE 🟢</h1>
+           <p>Uptime: ${uptimeHours} hrs | Checked: ${STATS.totalChecked} | Found: ${STATS.availableFound}</p>`);
 }).listen(PORT, () => {
   console.log(`[HTTP Server] Live on port ${PORT}`);
 });
 
-// 3. Configuration & State Management
+// 2. Configuration & State Management
 const CONFIG = {
   mode: process.env.SCAN_MODE || 'all_genres',
-  discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
+  discordToken: process.env.DISCORD_BOT_TOKEN || '',
+  mainChannelId: process.env.DISCORD_MAIN_CHANNEL_ID || '',
+  historyChannelId: process.env.DISCORD_HISTORY_CHANNEL_ID || '',
+  robloxCookie: process.env.ROBLOSECURITY_COOKIE || '',
+  autoClaimEnabled: process.env.AUTO_CLAIM === 'true',
   baseDelayMs: 2000
 };
 
-const seenUsernames = new Set(); // Memory cache prevents repeat checks
+const seenUsernames = new Set();
+const lifetimeHistory = [];
 
 const VOWELS = "aeiou";
 const CONSONANTS = "bcdfghjklmnpqrstvwxyz";
@@ -74,7 +45,7 @@ const WORDLISTS = {
   og_roots: ["sky", "zen", "orb", "vox", "arc", "pix", "lux", "neo", "aura", "nova", "echo", "mist", "frost", "dusk"]
 };
 
-// 4. Generator Logic
+// 3. Generators
 function generateCandidate(selectedMode) {
   let mode = selectedMode;
   if (mode === 'all_genres') {
@@ -125,35 +96,46 @@ function generateCandidate(selectedMode) {
   return { name: "vsky", genre: "Default" };
 }
 
-// 5. Silent Discord Alert
-async function sendDiscordAlert(username, genre) {
-  if (!CONFIG.discordWebhookUrl) return;
+// 4. Roblox Cookie Auto-Claimer Module
+async function claimUsernameOnRoblox(username) {
+  if (!CONFIG.robloxCookie) return { success: false, reason: "No Cookie Configured" };
 
   try {
-    await fetch(CONFIG.discordWebhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        content: `🚨 **RARE USERNAME UNLOCKED!** 🚨`,
-        embeds: [{
-          title: `✨ Verified Available Roblox Username!`,
-          description: `**Username:** \`${username}\`\n**Genre Style:** \`${genre}\`\n**Length:** \`${username.length} Letters\`\n**Numbers:** \`0 (Pure Letters)\``,
-          color: 65280,
-          fields: [{ name: "⚡ Quick Claim Link", value: `[Click Here to Register on Roblox](https://www.roblox.com)` }],
-          footer: { text: "24/7 Silent Aesthetic Finder" },
-          timestamp: new Date().toISOString()
-        }]
-      })
+    // Step A: Fetch CSRF Token
+    const csrfRes = await fetch("https://auth.roblox.com/v1/login", {
+      method: "POST",
+      headers: { "Cookie": `.ROBLOSECURITY=${CONFIG.robloxCookie}` }
     });
+    const csrfToken = csrfRes.headers.get("x-csrf-token");
+
+    if (!csrfToken) return { success: false, reason: "Failed to obtain CSRF Token" };
+
+    // Step B: Send Name Change / Claim Request
+    const claimRes = await fetch("https://accountsettings.roblox.com/v1/username", {
+      method: "POST",
+      headers: {
+        "Cookie": `.ROBLOSECURITY=${CONFIG.robloxCookie}`,
+        "x-csrf-token": csrfToken,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username, password: "" })
+    });
+
+    if (claimRes.ok) {
+      return { success: true, reason: "Claimed Successfully!" };
+    } else {
+      const errData = await claimRes.json().catch(() => ({}));
+      return { success: false, reason: errData.errors?.[0]?.message || `Status Code ${claimRes.status}` };
+    }
   } catch (err) {
-    console.error('Webhook Error:', err.message);
+    return { success: false, reason: err.message };
   }
 }
 
-// 6. Double-Verification Checker
+// 5. Verification Check
 async function checkUsername(username) {
   const customHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Content-Type': 'application/json'
   };
 
@@ -165,7 +147,6 @@ async function checkUsername(username) {
     });
 
     if (userCheckRes.status === 429) return 'ratelimit';
-
     if (userCheckRes.ok) {
       const userData = await userCheckRes.json();
       if (userData.data && userData.data.length > 0) return 'taken';
@@ -178,7 +159,6 @@ async function checkUsername(username) {
     });
 
     if (validateRes.status === 429) return 'ratelimit';
-
     if (validateRes.ok) {
       const valData = await validateRes.json();
       if (valData.code === 0) return 'available';
@@ -190,15 +170,119 @@ async function checkUsername(username) {
   }
 }
 
-// 7. Infinite Self-Healing Scanner Loop
+// 6. Discord Bot Client & Slash Commands Setup
+const discordClient = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+const slashCommands = [
+  new SlashCommandBuilder().setName('status').setDescription('View live status and scan statistics'),
+  new SlashCommandBuilder().setName('mode').setDescription('Change the username scan mode')
+    .addStringOption(opt => opt.setName('genre').setDescription('Choose genre')
+      .setRequired(true)
+      .addChoices(
+        { name: 'All Genres', value: 'all_genres' },
+        { name: 'Pure 3-Letter', value: 'pure3l' },
+        { name: 'Clean 4-Letter', value: 'clean4l' },
+        { name: 'Anime', value: 'anime' },
+        { name: 'Y2K Edgy', value: 'y2k_edgy' },
+        { name: 'Cute Soft', value: 'cute_soft' },
+        { name: 'Semi-OG Prefix', value: 'og_prefix' }
+      )),
+  new SlashCommandBuilder().setName('history').setDescription('View lifetime found available usernames')
+];
+
+discordClient.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === 'status') {
+    const uptime = ((Date.now() - STATS.startTime) / (1000 * 60 * 60)).toFixed(2);
+    const embed = new EmbedBuilder()
+      .setTitle("📊 Roblox Scanner Bot Status")
+      .setColor(0x38bdf8)
+      .addFields(
+        { name: "Total Checked", value: `${STATS.totalChecked}`, inline: true },
+        { name: "Available Found", value: `${STATS.availableFound}`, inline: true },
+        { name: "Current Mode", value: `\`${CONFIG.mode}\``, inline: true },
+        { name: "Uptime", value: `${uptime} hours`, inline: true },
+        { name: "Auto-Claimer", value: CONFIG.autoClaimEnabled ? "🟢 ENABLED" : "🔴 DISABLED", inline: true }
+      );
+    await interaction.reply({ embeds: [embed] });
+  }
+
+  if (interaction.commandName === 'mode') {
+    const newMode = interaction.options.getString('genre');
+    CONFIG.mode = newMode;
+    await interaction.reply(`✅ Scan mode updated to **\`${newMode}\`**!`);
+  }
+
+  if (interaction.commandName === 'history') {
+    if (lifetimeHistory.length === 0) {
+      return interaction.reply("📜 Lifetime History is currently empty. No rare names found yet.");
+    }
+    const historyList = lifetimeHistory.slice(-15).map((item, idx) => `${idx + 1}. \`${item.name}\` (${item.genre}) - *<t:${Math.floor(item.time / 1000)}:R>*`).join("\n");
+    const embed = new EmbedBuilder()
+      .setTitle("📜 Lifetime Username History (Recent 15)")
+      .setDescription(historyList)
+      .setColor(0x4ade80);
+    await interaction.reply({ embeds: [embed] });
+  }
+});
+
+// 7. Core Dispatcher & Scanner Loop
+async function dispatchAlert(candidate, claimResult) {
+  const embed = new EmbedBuilder()
+    .setTitle("🚨 RARE USERNAME UNLOCKED!")
+    .setDescription(`**Username:** \`${candidate.name}\`\n**Genre:** \`${candidate.genre}\`\n**Length:** \`${candidate.name.length} Letters\``)
+    .setColor(0x00ff00)
+    .setTimestamp();
+
+  if (CONFIG.autoClaimEnabled) {
+    embed.addFields({
+      name: "⚡ Sniper Mode Status",
+      value: claimResult.success ? `🎉 **AUTOMATICALLY CLAIMED!**` : `⚠️ Claim Attempt Failed: ${claimResult.reason}`
+    });
+  }
+
+  // Send to Main Channel
+  if (CONFIG.mainChannelId) {
+    const channel = await discordClient.channels.fetch(CONFIG.mainChannelId).catch(() => null);
+    if (channel) channel.send({ embeds: [embed] });
+  }
+
+  // Send to Lifetime History Channel
+  if (CONFIG.historyChannelId) {
+    const histChannel = await discordClient.channels.fetch(CONFIG.historyChannelId).catch(() => null);
+    if (histChannel) {
+      const histEmbed = new EmbedBuilder()
+        .setTitle("📜 History Entry")
+        .setDescription(`\`${candidate.name}\` | **Genre:** ${candidate.genre} | **Time:** <t:${Math.floor(Date.now() / 1000)}:F>`)
+        .setColor(0x38bdf8);
+      histChannel.send({ embeds: [histEmbed] });
+    }
+  }
+}
+
 async function startScanner() {
-  console.log("🚀 Bulletproof 24/7 Scanner Online!");
+  console.log("🚀 Multi-Feature Roblox Scanner Booting...");
+
+  if (CONFIG.discordToken) {
+    try {
+      await discordClient.login(CONFIG.discordToken);
+      console.log(`🤖 Logged into Discord as ${discordClient.user.tag}`);
+
+      const rest = new REST().setToken(CONFIG.discordToken);
+      await rest.put(
+        Routes.applicationCommands(discordClient.user.id),
+        { body: slashCommands }
+      );
+      console.log("⚡ Discord Slash Commands Registered!");
+    } catch (e) {
+      console.error("Discord Login Error:", e.message);
+    }
+  }
 
   while (true) {
     try {
       let candidate = generateCandidate(CONFIG.mode);
-      
-      // Avoid duplicate checks during the session
       let attempts = 0;
       while (seenUsernames.has(candidate.name) && attempts < 10) {
         candidate = generateCandidate(CONFIG.mode);
@@ -211,22 +295,28 @@ async function startScanner() {
       if (status === 'available') {
         STATS.availableFound++;
         STATS.lastFound = `${candidate.name} (${candidate.genre})`;
-        console.log(`\x1b[32m[VERIFIED AVAILABLE] ${candidate.name} (${candidate.genre})\x1b[0m`);
-        await sendDiscordAlert(candidate.name, candidate.genre);
+        lifetimeHistory.push({ name: candidate.name, genre: candidate.genre, time: Date.now() });
+
+        console.log(`\x1b[32m[AVAILABLE] ${candidate.name} (${candidate.genre})\x1b[0m`);
+
+        let claimResult = { success: false, reason: "Disabled" };
+        if (CONFIG.autoClaimEnabled) {
+          claimResult = await claimUsernameOnRoblox(candidate.name);
+        }
+
+        await dispatchAlert(candidate, claimResult);
         STATS.currentDelay = CONFIG.baseDelayMs;
       } else if (status === 'taken') {
         STATS.totalChecked++;
         console.log(`[Taken] ${candidate.name} (${candidate.genre})`);
         STATS.currentDelay = CONFIG.baseDelayMs;
       } else if (status === 'ratelimit') {
-        console.warn("⚠️ Rate limit detected. Backing off for 15s...");
+        console.warn("⚠️ Rate limited. Pausing 15s...");
         STATS.currentDelay = 15000;
       } else if (status === 'error') {
-        console.warn("⚠️ Network pause. Retrying in 5s...");
         STATS.currentDelay = 5000;
       }
-    } catch (criticalErr) {
-      console.error("Critical error caught:", criticalErr.message);
+    } catch (err) {
       STATS.currentDelay = 10000;
     }
 
