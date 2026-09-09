@@ -1,6 +1,6 @@
 const http = require('http');
 
-// 1. Health-check HTTP Server (Required by Render so the app stays live)
+// 1. Health-check HTTP Server for Render
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -9,11 +9,11 @@ http.createServer((req, res) => {
   console.log(`[HTTP Server] Listening on port ${PORT}`);
 });
 
-// 2. Configuration & Webhook Settings
+// 2. Configuration Settings
 const CONFIG = {
   mode: process.env.SCAN_MODE || '3char', // Options: '3char', '4char', 'og'
   discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
-  delayMs: 1800
+  delayMs: 2000 // 2 seconds prevents rate limits across both APIs
 };
 
 const letters = "abcdefghijklmnopqrstuvwxyz";
@@ -45,10 +45,10 @@ async function sendDiscordAlert(username) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        content: `@everyone 🎉 **RARE USERNAME AVAILABLE!**`,
+        content: `@everyone 🎉 **VERIFIED RARE USERNAME AVAILABLE!**`,
         embeds: [{
           title: '🎉 Roblox Rare Username Found!',
-          description: `**Username:** \`${username}\`\n**Status:** Available for registration!`,
+          description: `**Username:** \`${username}\`\n**Status:** Verified Available for Registration!`,
           color: 5763719,
           timestamp: new Date().toISOString()
         }]
@@ -59,39 +59,76 @@ async function sendDiscordAlert(username) {
   }
 }
 
+// STRICT DOUBLE-CHECK VERIFICATION
 async function checkUsername(username) {
+  const customHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  };
+
   try {
-    const res = await fetch("https://auth.roblox.com/v1/usernames/validate", {
+    // CHECK 1: Search if an account currently or previously existed with this name
+    const userCheckRes = await fetch("https://users.roblox.com/v1/usernames/users", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, birthday: "2000-01-01" })
+      headers: customHeaders,
+      body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
     });
 
-    if (res.status === 429) {
-      console.warn("⚠️ Rate limited. Pausing for 10 seconds...");
+    if (userCheckRes.status === 429) {
+      console.warn("⚠️ Rate limit on User Search. Cooling down 10s...");
       await new Promise(r => setTimeout(r, 10000));
       return 'ratelimit';
     }
 
-    const data = await res.json();
-    return data.code === 0 ? 'available' : 'taken';
+    if (userCheckRes.ok) {
+      const userData = await userCheckRes.json();
+      // If the array contains ANY user object, the name is taken or terminated
+      if (userData.data && userData.data.length > 0) {
+        return 'taken';
+      }
+    }
+
+    // CHECK 2: Validate if Roblox registration system allows claiming it
+    const validateRes = await fetch("https://auth.roblox.com/v1/usernames/validate", {
+      method: "POST",
+      headers: customHeaders,
+      body: JSON.stringify({ username, birthday: "2000-01-01" })
+    });
+
+    if (validateRes.status === 429) {
+      console.warn("⚠️ Rate limit on Auth API. Cooling down 10s...");
+      await new Promise(r => setTimeout(r, 10000));
+      return 'ratelimit';
+    }
+
+    if (validateRes.ok) {
+      const valData = await validateRes.json();
+      // Code 0 = Valid and available for new account registration
+      if (valData.code === 0) {
+        return 'available';
+      }
+    }
+
+    return 'taken';
   } catch (err) {
+    console.error("Network/API error:", err.message);
     return 'error';
   }
 }
 
 async function startScanner() {
-  console.log("🚀 Roblox Username Scanner Started 24/7!");
-  
+  console.log("🚀 Strict Double-Verification Roblox Scanner Started!");
+
   while (true) {
     const candidate = generateCandidate(CONFIG.mode);
     const status = await checkUsername(candidate);
 
     if (status === 'available') {
-      console.log(`🎉 [FOUND AVAILABLE NAME] ${candidate}`);
+      console.log(`\x1b[32m[VERIFIED AVAILABLE] ${candidate}\x1b[0m`);
       await sendDiscordAlert(candidate);
     } else if (status === 'taken') {
-      console.log(`❌ [Taken] ${candidate}`);
+      console.log(`[Taken/Unavailable] ${candidate}`);
     }
 
     await new Promise(r => setTimeout(r, CONFIG.delayMs));
